@@ -1,0 +1,363 @@
+{
+  "Comment": "A description of my state machine",
+  "StartAt": "Verify Uploaded File",
+  "States": {
+    "Verify Uploaded File": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Output": "{% $states.result.Payload %}",
+      "Arguments": {
+        "FunctionName": "arn:aws:lambda:eu-north-1:function:VerifyAudioFile:$LATEST",
+        "Payload": "{% $states.input %}"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Next": "Is File Valid",
+      "Assign": {
+        "file": "{% $states.result.Payload.file %}",
+        "bucket": "{% $states.result.Payload.bucket %}",
+        "outputbucket": "encoded-audio-bucket"
+      }
+    },
+    "Is File Valid": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Condition": "{% $states.input.status = 200 %}",
+          "Next": "StartTranscriptionJob"
+        }
+      ],
+      "Default": "Delete Uploaded File"
+    },
+    "StartTranscriptionJob": {
+      "Type": "Task",
+      "Arguments": {
+        "Media": {
+          "MediaFileUri": "{% 's3://' & $bucket & '/' & $file %}"
+        },
+        "IdentifyLanguage": true,
+        "TranscriptionJobName": "MyData",
+        "Subtitles": {
+          "Formats": [
+            "srt"
+          ],
+          "OutputStartIndex": 1
+        }
+      },
+      "Resource": "arn:aws:states:::aws-sdk:transcribe:startTranscriptionJob",
+      "Next": "GetTranscriptionJob"
+    },
+    "GetTranscriptionJob": {
+      "Type": "Task",
+      "Arguments": {
+        "TranscriptionJobName": "MyData"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:transcribe:getTranscriptionJob",
+      "Next": "Is Transcription Ready"
+    },
+    "Is Transcription Ready": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Next": "Wait Transcription Job",
+          "Condition": "{% $states.input.TranscriptionJob.TranscriptionJobStatus != \"COMPLETED\" %}"
+        }
+      ],
+      "Default": "DeleteTranscriptionJob"
+    },
+    "Wait Transcription Job": {
+      "Type": "Wait",
+      "Seconds": 3,
+      "Next": "GetTranscriptionJob"
+    },
+    "DeleteTranscriptionJob": {
+      "Type": "Task",
+      "Arguments": {
+        "TranscriptionJobName": "MyData"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:transcribe:deleteTranscriptionJob",
+      "Next": "Parallel Encode",
+      "Assign": {
+        "subtitles": "{% $states.input.TranscriptionJob.Subtitles.SubtitleFileUris[0] %}"
+      }
+    },
+    "Parallel Encode": {
+      "Type": "Parallel",
+      "Next": "Loop Through All Encoded Files",
+      "Branches": [
+        {
+          "StartAt": "Encode with 64k Bitrate",
+          "States": {
+            "Encode with 64k Bitrate": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Output": "{% $states.result.Payload %}",
+              "Arguments": {
+                "FunctionName": "arn:aws:lambda:eu-north-1:function:FfmpegEncodeAudio:$LATEST",
+                "Payload": {
+                  "input": {
+                    "bucket": "{% $bucket %}",
+                    "key": "{% $file %}"
+                  },
+                  "output": {
+                    "bucket": "{% $outputbucket %}"
+                  },
+                  "encoding": {
+                    "bitrate": "64k"
+                  }
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2,
+                  "JitterStrategy": "FULL"
+                }
+              ],
+              "End": true,
+              "TimeoutSeconds": 5
+            }
+          }
+        },
+        {
+          "StartAt": "Encode with 128k Bitrate",
+          "States": {
+            "Encode with 128k Bitrate": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Output": "{% $states.result.Payload %}",
+              "Arguments": {
+                "FunctionName": "arn:aws:lambda:eu-north-1:function:FfmpegEncodeAudio:$LATEST",
+                "Payload": {
+                  "input": {
+                    "bucket": "{% $bucket %}",
+                    "key": "{% $file %}"
+                  },
+                  "output": {
+                    "bucket": "{% $outputbucket %}"
+                  },
+                  "encoding": {
+                    "bitrate": "128k"
+                  }
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2,
+                  "JitterStrategy": "FULL"
+                }
+              ],
+              "End": true,
+              "TimeoutSeconds": 5
+            }
+          }
+        },
+        {
+          "StartAt": "Encode with 192k Bitrate",
+          "States": {
+            "Encode with 192k Bitrate": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Output": "{% $states.result.Payload %}",
+              "Arguments": {
+                "FunctionName": "arn:aws:lambda:eu-north-1:function:FfmpegEncodeAudio:$LATEST",
+                "Payload": {
+                  "input": {
+                    "bucket": "{% $bucket %}",
+                    "key": "{% $file %}"
+                  },
+                  "output": {
+                    "bucket": "{% $outputbucket %}"
+                  },
+                  "encoding": {
+                    "bitrate": "192k"
+                  }
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2,
+                  "JitterStrategy": "FULL"
+                }
+              ],
+              "End": true,
+              "TimeoutSeconds": 5
+            }
+          }
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Wait",
+          "Comment": "Catch Encoding Errors"
+        }
+      ]
+    },
+    "Loop Through All Encoded Files": {
+      "Type": "Map",
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "Determine Quality Based On Bitrate",
+        "States": {
+          "Determine Quality Based On Bitrate": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Output": "{% $states.result.Payload %}",
+            "Arguments": {
+              "FunctionName": "arn:aws:lambda:eu-north-1:function:BitrateToQuality:$LATEST",
+              "Payload": "{% $states.input %}"
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 1,
+                "MaxAttempts": 3,
+                "BackoffRate": 2,
+                "JitterStrategy": "FULL"
+              }
+            ],
+            "Next": "Save Encoded File Info To DB"
+          },
+          "Save Encoded File Info To DB": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:putItem",
+            "Arguments": {
+              "TableName": "AudioFiles",
+              "Item": {
+                "FileName": {
+                  "S": "{% $states.input.input.key %}"
+                },
+                "Quality": {
+                  "S": "{% $states.input.quality %}"
+                },
+                "Bucket": {
+                  "S": "{% $states.input.input.bucket %}"
+                },
+                "OutBucket": {
+                  "S": "{% $states.input.output.bucket %}"
+                },
+                "OutKey": {
+                  "S": "{% $states.input.output.key %}"
+                },
+                "Subtitles": {
+                  "S": "{% $subtitles %}"
+                }
+              }
+            },
+            "End": true
+          }
+        }
+      },
+      "Next": "Succeed"
+    },
+    "Wait": {
+      "Type": "Wait",
+      "Seconds": 10,
+      "Next": "List Encoded Files"
+    },
+    "List Encoded Files": {
+      "Type": "Task",
+      "Arguments": {
+        "Bucket": "{% $outputbucket %}",
+        "Prefix": "{% 'encoded/' & $file %}"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:s3:listObjectsV2",
+      "Next": "Set List Of Encoded Files"
+    },
+    "Set List Of Encoded Files": {
+      "Type": "Pass",
+      "Next": "Loop Through Encoded Files",
+      "Assign": {
+        "contents": "{% $states.input.Contents %}"
+      }
+    },
+    "Loop Through Encoded Files": {
+      "Type": "Map",
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "Delete Encoded File",
+        "States": {
+          "Delete Encoded File": {
+            "Type": "Task",
+            "Arguments": {
+              "Bucket": "{% $outputbucket %}",
+              "Key": "{% $states.input.Key %}"
+            },
+            "Resource": "arn:aws:states:::aws-sdk:s3:deleteObject",
+            "End": true
+          }
+        }
+      },
+      "Next": "Encode Failure",
+      "Items": "{% $contents %}"
+    },
+    "Encode Failure": {
+      "Type": "Fail",
+      "Error": "EncodeError"
+    },
+    "Delete Uploaded File": {
+      "Type": "Task",
+      "Arguments": {
+        "Bucket": "{% $bucket %}",
+        "Key": "{% $file %}"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:s3:deleteObject",
+      "Next": "Upload File Isn't Valid"
+    },
+    "Succeed": {
+      "Type": "Succeed"
+    },
+    "Upload File Isn't Valid": {
+      "Type": "Fail",
+      "Error": "UploadFileNonValid"
+    }
+  },
+  "QueryLanguage": "JSONata"
+}
